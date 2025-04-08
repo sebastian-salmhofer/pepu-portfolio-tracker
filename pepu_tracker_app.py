@@ -3,7 +3,7 @@ import requests
 import concurrent.futures
 from web3 import Web3
 
-# CONFIG
+# === CONFIG ===
 RPC_URL = "https://rpc-pepe-unchained-gupg0lo9wf.t.conduit.xyz"
 PEPU_ETH_INFO = "https://api.geckoterminal.com/api/v2/networks/eth/tokens/0xadd39272e83895e7d3f244f696b7a25635f34234"
 TOKEN_BALANCE_API = "https://explorer-pepe-unchained-gupg0lo9wf.t.conduit.xyz/api/v2/addresses/{}/token-balances"
@@ -36,41 +36,52 @@ staking_abi = [
 web3 = Web3(Web3.HTTPProvider(RPC_URL))
 contract = web3.eth.contract(address=STAKING_CONTRACT, abi=staking_abi)
 
-# PAGE SETUP & GLOBAL STYLES
+# === PAGE SETUP ===
 st.set_page_config(page_title="Pepe Unchained Portfolio", layout="wide")
+
+# === GLOBAL STYLE ===
 st.markdown("""
 <style>
-    body {
-        background-color: #f2f2f2;
-    }
-    .token-card {
-        border: 2px solid #cccccc;
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 15px;
-        margin-bottom: 10px;
-    }
-    .token-header {
-        font-size: 16px;
-        font-weight: bold;
-        color: #333333;
-    }
-    .token-sub {
-        font-size: 12px;
-        color: #777777;
-    }
-    .token-label {
-        margin-top: 8px;
-        color: #444444;
-    }
-    .token-warning {
-        color: #ffa500;
-        font-size: 12px;
-        margin-top: 6px;
-    }
+body {
+    background-color: #f2f2f2;
+}
+.token-card {
+    border: 2px solid #cccccc;
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 10px;
+}
+.token-header {
+    font-size: 16px;
+    font-weight: bold;
+    color: #333333;
+}
+.token-sub {
+    font-size: 12px;
+    color: #777777;
+}
+.token-label {
+    margin-top: 8px;
+    color: #444444;
+}
+.token-warning {
+    color: #ffa500;
+    font-size: 12px;
+    margin-top: 6px;
+}
+
+/* Hide Streamlit UI elements */
+#MainMenu, header, footer {
+    visibility: hidden;
+}
+.block-container {
+    padding-top: 1rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
+# === TITLE ===
 st.title("🐸 Pepe Unchained Portfolio Tracker")
 
 # === FUNCTIONS ===
@@ -145,7 +156,7 @@ def render_token_card(name, symbol, amount, price, value, icon_url, contract_add
         </div>
     """, unsafe_allow_html=True)
 
-# === APP UI ===
+# === MAIN APP ===
 wallet = st.text_input("Enter your wallet address", placeholder="0x...")
 
 if wallet and wallet.startswith("0x") and len(wallet) == 42:
@@ -155,7 +166,7 @@ if wallet and wallet.startswith("0x") and len(wallet) == 42:
         native = get_native_balance(wallet)
         staked, rewards = get_staked_and_rewards(wallet)
 
-        st.subheader("Pepe Unchained")
+        st.subheader("💚 Pepe Unchained")
         pepu_cols = st.columns(3)
         with pepu_cols[0]:
             total += render_pepu_card("Wallet Balance", native, pepu_price, pepu_icon)
@@ -165,7 +176,7 @@ if wallet and wallet.startswith("0x") and len(wallet) == 42:
             total += render_pepu_card("Unclaimed Rewards", rewards, pepu_price, pepu_icon)
 
         st.markdown("---")
-        st.subheader("Other Tokens")
+        st.subheader("📦 Other Tokens")
 
         tokens = get_token_balances(wallet)
         addresses = [t["token"]["address"] for t in tokens]
