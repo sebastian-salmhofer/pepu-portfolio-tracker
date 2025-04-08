@@ -45,33 +45,6 @@ st.markdown("""
 body {
     background-color: #f2f2f2;
 }
-.token-card {
-    border: 2px solid #cccccc;
-    background-color: #ffffff;
-    border-radius: 12px;
-    padding: 15px;
-    margin-bottom: 10px;
-}
-.token-header {
-    font-size: 16px;
-    font-weight: bold;
-    color: #333333;
-}
-.token-sub {
-    font-size: 12px;
-    color: #777777;
-}
-.token-label {
-    margin-top: 8px;
-    color: #444444;
-}
-.token-warning {
-    color: #ffa500;
-    font-size: 12px;
-    margin-top: 6px;
-}
-
-/* Hide Streamlit UI elements */
 #MainMenu, header, footer {
     visibility: hidden;
 }
@@ -79,7 +52,17 @@ body {
     padding-top: 1rem;
 }
 </style>
+
+<script>
+function postHeight() {
+  const height = document.body.scrollHeight;
+  window.parent.postMessage({ height: height }, "*");
+}
+
+setInterval(postHeight, 500);
+</script>
 """, unsafe_allow_html=True)
+
 
 # === TITLE ===
 st.title("🐸 Pepe Unchained Portfolio Tracker")
