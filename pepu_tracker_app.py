@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import concurrent.futures
 from web3 import Web3
+import html
 
 # === CONFIG ===
 RPC_URL = "https://rpc-pepe-unchained-gupg0lo9wf.t.conduit.xyz"
@@ -39,11 +40,36 @@ contract = web3.eth.contract(address=STAKING_CONTRACT, abi=staking_abi)
 # === PAGE SETUP ===
 st.set_page_config(page_title="Pepe Unchained Portfolio", layout="wide")
 
-# === GLOBAL STYLE ===
+# === GLOBAL STYLE & HEIGHT SYNC ===
 st.markdown("""
 <style>
 body {
     background-color: #f2f2f2;
+}
+.token-card {
+    border: 2px solid #cccccc;
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 10px;
+}
+.token-header {
+    font-size: 16px;
+    font-weight: bold;
+    color: #333333;
+}
+.token-sub {
+    font-size: 12px;
+    color: #777777;
+}
+.token-label {
+    margin-top: 8px;
+    color: #444444;
+}
+.token-warning {
+    color: #ffa500;
+    font-size: 12px;
+    margin-top: 6px;
 }
 #MainMenu, header, footer {
     visibility: hidden;
@@ -55,16 +81,13 @@ body {
 
 <script>
 function postHeight() {
-  const height = document.body.scrollHeight;
-  window.parent.postMessage({ height: height }, "*");
+    const height = document.body.scrollHeight;
+    window.parent.postMessage({ height: height }, "*");
 }
-
 setInterval(postHeight, 500);
 </script>
 """, unsafe_allow_html=True)
 
-
-# === TITLE ===
 st.title("🐸 Pepe Unchained Portfolio Tracker")
 
 # === FUNCTIONS ===
@@ -102,7 +125,7 @@ def render_pepu_card(label, amount, price, icon):
         <div class='token-card'>
             <div style='display:flex; align-items:center; gap:10px;'>
                 <img src="{icon}" width="32" height="32" />
-                <div class='token-header'>{label}</div>
+                <div class='token-header'>{html.escape(label)}</div>
             </div>
             <div class='token-label'>
                 <div>Amount: <strong>{amount:,.4f}</strong></div>
@@ -117,7 +140,11 @@ def render_token_card(name, symbol, amount, price, value, icon_url, contract_add
     price_display = f"${price:,.6f}" if price else "N/A"
     value_display = f"${value:,.2f}" if price else "N/A"
     token_link = f"https://www.geckoterminal.com/pepe-unchained/pools/{contract_address}"
-    warning_html = f"<div class='token-warning'>{warning}</div>" if warning else ""
+    warning_html = f"<div class='token-warning'>{html.escape(warning)}</div>" if warning else ""
+
+    safe_name = html.escape(name or "Unknown")
+    safe_symbol = html.escape(symbol or "")
+    safe_ca = html.escape(contract_address)
 
     st.markdown(f"""
         <div class='token-card'>
@@ -125,9 +152,9 @@ def render_token_card(name, symbol, amount, price, value, icon_url, contract_add
                 <img src="{icon_url}" width="32" height="32" style="border-radius:4px;" />
                 <div>
                     <a href="{token_link}" target="_blank" class="token-header">
-                        {name} ({symbol})
+                        {safe_name} ({safe_symbol})
                     </a><br/>
-                    <div class="token-sub">{contract_address}</div>
+                    <div class="token-sub">{safe_ca}</div>
                 </div>
             </div>
             <div class='token-label'>
