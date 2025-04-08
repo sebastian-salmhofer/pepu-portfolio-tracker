@@ -1,0 +1,3 @@
+streamlit
+requests
+web3
