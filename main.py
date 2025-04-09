@@ -3,6 +3,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from web3 import Web3
+import time
 
 app = FastAPI()
 
@@ -20,6 +21,8 @@ NATIVE_BALANCE_API = "https://explorer-pepe-unchained-gupg0lo9wf.t.conduit.xyz/a
 TOKEN_INFO_API = "https://api.geckoterminal.com/api/v2/networks/pepe-unchained/tokens/{}"
 STAKING_CONTRACT = "0xf0163C18F8D3fC8D5b4cA15e07D0F9f75460335F"
 
+# Web3 & ABI setup
+web3 = Web3(Web3.HTTPProvider(RPC_URL))
 staking_abi = [
     {
         "name": "poolStakers",
@@ -41,15 +44,26 @@ staking_abi = [
         "type": "function"
     }
 ]
-
-web3 = Web3(Web3.HTTPProvider(RPC_URL))
 contract = web3.eth.contract(address=STAKING_CONTRACT, abi=staking_abi)
+
+# Caching
+pepu_cache = {"price": None, "icon": None, "timestamp": 0}
+token_cache = {}  # key: address, value: {data, timestamp}
+CACHE_TTL = 180  # 3 minutes
 
 @app.get("/portfolio")
 def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
-    pepu_price = requests.get(PEPU_ETH_INFO).json()["data"]["attributes"]["price_usd"]
-    pepu_icon = requests.get(PEPU_ETH_INFO).json()["data"]["attributes"]["image_url"]
-    pepu_price = float(pepu_price)
+    now = time.time()
+
+    # PEPU price/icon cache
+    if now - pepu_cache["timestamp"] > CACHE_TTL:
+        info = requests.get(PEPU_ETH_INFO).json()["data"]["attributes"]
+        pepu_cache["price"] = float(info["price_usd"])
+        pepu_cache["icon"] = info["image_url"]
+        pepu_cache["timestamp"] = now
+
+    pepu_price = pepu_cache["price"]
+    pepu_icon = pepu_cache["icon"]
 
     native = int(requests.get(NATIVE_BALANCE_API.format(wallet)).json().get("coin_balance", 0)) / 1e18
     staked = contract.functions.poolStakers(wallet).call()[0] / 1e18
@@ -92,15 +106,29 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
         decimals = int(tok.get("decimals", 18)) if tok.get("decimals") else 18
         amount = int(t["value"]) / (10 ** decimals)
 
-        try:
-            info = requests.get(TOKEN_INFO_API.format(addr)).json()["data"]["attributes"]
-            price = float(info.get("price_usd", 0.0) or 0.0)
-            icon = info.get("image_url", "https://placehold.co/32x32")
-            liquidity = float(info.get("total_reserve_in_usd", 0.0) or 0.0)
-        except:
-            price = 0.0
-            icon = "https://placehold.co/32x32"
-            liquidity = 0.0
+        # Token cache
+        token_info = token_cache.get(addr)
+        if not token_info or now - token_info["timestamp"] > CACHE_TTL:
+            try:
+                info = requests.get(TOKEN_INFO_API.format(addr)).json()["data"]["attributes"]
+                token_info = {
+                    "price_usd": float(info.get("price_usd", 0.0) or 0.0),
+                    "icon_url": info.get("image_url", "https://placehold.co/32x32"),
+                    "liquidity": float(info.get("total_reserve_in_usd", 0.0) or 0.0),
+                    "timestamp": now
+                }
+                token_cache[addr] = token_info
+            except:
+                token_info = {
+                    "price_usd": 0.0,
+                    "icon_url": "https://placehold.co/32x32",
+                    "liquidity": 0.0,
+                    "timestamp": now
+                }
+
+        price = token_info["price_usd"]
+        icon = token_info["icon_url"]
+        liquidity = token_info["liquidity"]
 
         warning = None
         if liquidity < 1000:
