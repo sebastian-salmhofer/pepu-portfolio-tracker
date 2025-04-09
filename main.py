@@ -1,4 +1,3 @@
-# main.py
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
@@ -21,7 +20,6 @@ NATIVE_BALANCE_API = "https://explorer-pepe-unchained-gupg0lo9wf.t.conduit.xyz/a
 TOKEN_INFO_API = "https://api.geckoterminal.com/api/v2/networks/pepe-unchained/tokens/{}"
 STAKING_CONTRACT = "0xf0163C18F8D3fC8D5b4cA15e07D0F9f75460335F"
 
-# Web3 & ABI setup
 web3 = Web3(Web3.HTTPProvider(RPC_URL))
 staking_abi = [
     {
@@ -46,16 +44,15 @@ staking_abi = [
 ]
 contract = web3.eth.contract(address=STAKING_CONTRACT, abi=staking_abi)
 
-# Caching
 pepu_cache = {"price": None, "icon": None, "timestamp": 0}
-token_cache = {}  # key: address, value: {data, timestamp}
-CACHE_TTL = 180  # 3 minutes
+token_cache = {}
+CACHE_TTL = 180
 
 @app.get("/portfolio")
 def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
     now = time.time()
+    checksum_wallet = Web3.to_checksum_address(wallet)
 
-    # PEPU price/icon cache
     if now - pepu_cache["timestamp"] > CACHE_TTL:
         info = requests.get(PEPU_ETH_INFO).json()["data"]["attributes"]
         pepu_cache["price"] = float(info["price_usd"])
@@ -64,12 +61,6 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
 
     pepu_price = pepu_cache["price"]
     pepu_icon = pepu_cache["icon"]
-
-    # Convert wallet to checksum format for Web3 contract calls
-    try:
-        checksum_wallet = Web3.to_checksum_address(wallet)
-    except:
-        return {"error": "Invalid wallet address format"}
 
     native = int(requests.get(NATIVE_BALANCE_API.format(wallet)).json().get("coin_balance", 0)) / 1e18
     staked = contract.functions.poolStakers(checksum_wallet).call()[0] / 1e18
@@ -112,7 +103,7 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
         decimals = int(tok.get("decimals", 18)) if tok.get("decimals") else 18
         amount = int(t["value"]) / (10 ** decimals)
 
-        # Token cache
+        info_response_failed = False
         token_info = token_cache.get(addr)
         if not token_info or now - token_info["timestamp"] > CACHE_TTL:
             try:
@@ -125,6 +116,7 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
                 }
                 token_cache[addr] = token_info
             except:
+                info_response_failed = True
                 token_info = {
                     "price_usd": 0.0,
                     "icon_url": "https://placehold.co/32x32",
@@ -136,10 +128,13 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
         icon = token_info["icon_url"]
         liquidity = token_info["liquidity"]
 
-        warning = None
-        if liquidity < 1000:
+        if info_response_failed:
+            warning = "Error fetching price data"
+        elif liquidity < 1000:
             price = 0.0
             warning = "Low liquidity pool"
+        else:
+            warning = None
 
         total_usd = amount * price if price else 0.0
         if price:
