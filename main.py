@@ -65,9 +65,15 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
     pepu_price = pepu_cache["price"]
     pepu_icon = pepu_cache["icon"]
 
+    # Convert wallet to checksum format for Web3 contract calls
+    try:
+        checksum_wallet = Web3.to_checksum_address(wallet)
+    except:
+        return {"error": "Invalid wallet address format"}
+
     native = int(requests.get(NATIVE_BALANCE_API.format(wallet)).json().get("coin_balance", 0)) / 1e18
-    staked = contract.functions.poolStakers(wallet).call()[0] / 1e18
-    rewards = contract.functions.getRewards(wallet).call() / 1e18
+    staked = contract.functions.poolStakers(checksum_wallet).call()[0] / 1e18
+    rewards = contract.functions.getRewards(checksum_wallet).call() / 1e18
 
     tokens = requests.get(TOKEN_BALANCE_API.format(wallet)).json()
     total = native * pepu_price + staked * pepu_price + rewards * pepu_price
