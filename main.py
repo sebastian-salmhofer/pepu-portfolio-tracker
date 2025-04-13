@@ -21,7 +21,7 @@ PEPU_ETH_INFO = "https://api.geckoterminal.com/api/v2/networks/eth/tokens/0xadd3
 TOKEN_BALANCE_API = "https://explorer-pepe-unchained-gupg0lo9wf.t.conduit.xyz/api/v2/addresses/{}/token-balances"
 NATIVE_BALANCE_API = "https://explorer-pepe-unchained-gupg0lo9wf.t.conduit.xyz/api/v2/addresses/{}"
 NFT_API = "https://explorer-pepe-unchained-gupg0lo9wf.t.conduit.xyz/api/v2/addresses/{}/nft?type=ERC-721%2CERC-404%2CERC-1155"
-BATCH_PRICE_API = "https://api.geckoterminal.com/api/v2/simple/networks/pepe-unchained/token_price/{}?include_total_reserve_in_usd=true"
+BATCH_PRICE_API = "https://api.geckoterminal.com/api/v2/simple/networks/pepe-unchained/token_price/{}?include_24hr_vol=true&include_24hr_price_change=true&include_total_reserve_in_usd=true"
 TOKEN_INFO_API = "https://api.geckoterminal.com/api/v2/networks/pepe-unchained/tokens/{}"
 STAKING_CONTRACT = "0xf0163C18F8D3fC8D5b4cA15e07D0F9f75460335F"
 LP_MANAGER_ADDRESS = "0x5e7cda0b5f1d239e6ea03beaee12008ba4184782"
@@ -85,7 +85,11 @@ staking_contract = web3.eth.contract(address=STAKING_CONTRACT, abi=staking_abi)
 lp_contract = web3.eth.contract(address=Web3.to_checksum_address(LP_MANAGER_ADDRESS), abi=lp_manager_abi)
 
 pepu_cache = {"price": None, "icon": None, "timestamp": 0}
-token_cache = {}
+token_cache = {
+    "0x4200000000000000000000000000000000000006": {
+        "icon_url": "https://coin-images.coingecko.com/coins/images/52681/large/wn6wNj1C_400x400.jpg?1734021973"
+    }
+}
 CACHE_TTL = 300
 
 def populate_icon_cache(token_addrs, now, retries=1, delay=1.5):
@@ -97,11 +101,10 @@ def populate_icon_cache(token_addrs, now, retries=1, delay=1.5):
                 token_cache[addr] = {}
             if "icon_url" not in token_cache[addr]:
                 try:
-                    res = requests.get(TOKEN_INFO_API.format(addr)).json()["data"]["attributes"]
+                    url = TOKEN_INFO_API.format(addr)
+                    print(f"[ICON] Fetching: {url}")
+                    res = requests.get(url).json()["data"]["attributes"]
                     token_cache[addr]["icon_url"] = res.get("image_url")
-                    token_cache[addr]["price_usd"] = float(res.get("price_usd", 0.0) or 0.0)
-                    token_cache[addr]["liquidity"] = float(res.get("total_reserve_in_usd", 0.0) or 0.0)
-                    token_cache[addr]["timestamp"] = now
                 except:
                     next_try.append(addr)
         if not next_try:
@@ -116,14 +119,20 @@ def populate_price_cache(token_addrs, now, retries=1, delay=1.5):
         for i in range(0, len(remaining), 30):
             batch = remaining[i:i+30]
             try:
-                res = requests.get(BATCH_PRICE_API.format("%2C".join(batch))).json()["data"]["attributes"]
+                url = BATCH_PRICE_API.format("%2C".join(batch))
+                print(f"[PRICE] Fetching: {url}")
+                res = requests.get(url).json()["data"]["attributes"]
                 price_data = res["token_prices"]
                 liq_data = res["total_reserve_in_usd"]
+                vol_data = res.get("h24_volume_usd", {})
+                change_data = res.get("h24_price_change_percentage", {})
                 for addr in batch:
                     if addr not in token_cache:
                         token_cache[addr] = {}
                     token_cache[addr]["price_usd"] = float(price_data.get(addr, 0.0) or 0.0)
                     token_cache[addr]["liquidity"] = float(liq_data.get(addr, 0.0) or 0.0)
+                    token_cache[addr]["volume_24h_usd"] = float(vol_data.get(addr, 0.0) or 0.0)
+                    token_cache[addr]["price_change_24h_percentage"] = float(change_data.get(addr, 0.0) or 0.0)
                     token_cache[addr]["timestamp"] = now
             except:
                 next_try.extend(batch)
@@ -156,6 +165,7 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
         checksum_wallet = Web3.to_checksum_address(wallet)
     except:
         return {"error": "Invalid wallet address format."}
+        
     native = int(requests.get(NATIVE_BALANCE_API.format(wallet)).json().get("coin_balance", 0)) / 1e18
     try:
         staked_raw = staking_contract.functions.poolStakers(checksum_wallet).call()
@@ -215,7 +225,6 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
             "icon": pepu_icon
         },
         "tokens": [],
-        "lp_positions": [],
         "total_value_usd": 0.0
     }
 
@@ -252,6 +261,8 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
         info = token_cache.get(addr, {})
         price = info.get("price_usd", 0.0)
         liquidity = info.get("liquidity", 0.0)
+        volume_24h_usd = info.get("volume_24h_usd", 0.0)
+        price_change_24h_percentage = info.get("price_change_24h_percentage", 0.0)
         icon = info.get("icon_url") or "https://placehold.co/32x32"
     
         warning = None
@@ -272,11 +283,27 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
             "amount": amount,
             "price_usd": price,
             "total_usd": total_usd,
+            "volume_24h_usd": volume_24h_usd,
+            "price_change_24h_percentage": price_change_24h_percentage,
             "icon_url": icon,
             "warning": warning
         })
+        
+    result["tokens"].sort(key=lambda x: x["total_usd"], reverse=True)
+    result["total_value_usd"] = round(total, 2)
+    return result
 
+@app.get("/lp-positions")
+def get_lp_positions(wallet: str = Query(..., min_length=42, max_length=42)):
+    now = time.time()
 
+    total_lp = 0.0
+    
+    try:
+        checksum_wallet = Web3.to_checksum_address(wallet)
+    except:
+        return {"error": "Invalid wallet address format."}
+        
     # LP NFT positions
     try:
         nft_data = requests.get(NFT_API.format(wallet), timeout=15).json()
@@ -286,6 +313,11 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
         ]
     
         lp_price_update = set()
+        
+        result = {
+            "lp_positions": [],
+            "total_value_usd": 0.0
+        }
     
         def process_lp(item):
             try:
@@ -294,9 +326,19 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
                 token0 = Web3.to_checksum_address(pos[2])
                 token1 = Web3.to_checksum_address(pos[3])
                 liquidity = pos[7]
-    
+
+                if liquidity == 0:
+                    return None
+                
                 pool_match = re.search(r"Pool Address: (0x[a-fA-F0-9]{40})", item.get("metadata", {}).get("description", ""))
                 pool_address = pool_match.group(1) if pool_match else None
+                
+                symbol0_match = re.search(rf"([\S]+) Address: {re.escape(token0)}", item.get("metadata", {}).get("description", ""), re.IGNORECASE)
+                symbol0 = symbol0_match.group(1) if symbol0_match else "?"
+                
+                symbol1_match = re.search(rf"([\S]+) Address: {re.escape(token1)}", item.get("metadata", {}).get("description", ""), re.IGNORECASE)
+                symbol1 = symbol1_match.group(1) if symbol1_match else "?"
+
     
                 amount0 = amount1 = 0
                 if pool_address:
@@ -334,21 +376,24 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
                     # Icons
                     for addr in [token0_lower, token1_lower]:
                         if token_cache.get(addr, {}).get("icon_url") is None:
-                            populate_icon_cache(addr, now)
+                            populate_icon_cache([addr], now)
     
                     # Price check
                     if token0_lower not in token_cache or (now - token_cache[token0_lower].get("timestamp", 0)) > CACHE_TTL:
                         lp_price_update.update([token0_lower])
                     if token1_lower not in token_cache or (now - token_cache[token1_lower].get("timestamp", 0)) > CACHE_TTL:
                         lp_price_update.update([token1_lower])
-    
+
                     icon0 = token_cache.get(token0_lower, {}).get("icon_url", "https://placehold.co/32x32")
                     icon1 = token_cache.get(token1_lower, {}).get("icon_url", "https://placehold.co/32x32")
+
     
                     return {
                         "token_id": token_id,
                         "token0": token0,
                         "token1": token1,
+                        "symbol0": symbol0,
+                        "symbol1": symbol1,
                         "pool_address": pool_address,
                         "lp_name": item.get("metadata", {}).get("name", "Unknown LP"),
                         "amount0": amount0,
@@ -365,6 +410,8 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
                     "token_id": item.get("id"),
                     "token0": item.get("token0", "Unknown"),
                     "token1": item.get("token1", "Unknown"),
+                    "symbol0": item.get("symbol0", "Unknown"),
+                    "symbol1": item.get("symbol1", "Unknown"),
                     "pool_address": item.get("metadata", {}).get("description", "Unknown"),
                     "lp_name": item.get("metadata", {}).get("name", "Unknown LP"),
                     "amount0": 0,
@@ -397,11 +444,75 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
             else:
                 lp["amount0_usd"] = lp["amount0"] * price0
                 lp["amount1_usd"] = lp["amount1"] * price1
-                total += lp["amount0_usd"] + lp["amount1_usd"]
+                total_lp += lp["amount0_usd"] + lp["amount1_usd"]
     
     except Exception as e:
         result["lp_positions"].append({"error": f"Failed to fetch LPs: {str(e)}"})
 
-    result["tokens"].sort(key=lambda x: x["total_usd"], reverse=True)
-    result["total_value_usd"] = round(total, 2)
+    result["lp_positions"].sort(key=lambda x: x.get("amount0_usd", 0) + x.get("amount1_usd", 0), reverse=True)
+    result["total_value_usd"] = round(total_lp, 2)
     return result
+
+
+
+
+PESW_PRESALE_CA = Web3.to_checksum_address("0xcE4268fB5908dAf59c198Ef26ef3f78949bf772C")
+PESW_STAKING_MANAGER_CA = Web3.to_checksum_address("0xDd6f17b253eDc9e3D7329FB6EA293DbF8b4c214d")
+
+# ABIs
+pesw_presale_abi = [
+    {"name": "getUserDeposits", "inputs": [{"name": "user", "type": "bytes"}], "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"name": "currentStep", "inputs": [], "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {
+        "name": "rounds",
+        "inputs": [
+            {"name": "", "type": "uint256"},
+            {"name": "", "type": "uint256"}
+        ],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
+
+pesw_staking_abi = [
+    {"name": "getPoolStakers", "inputs": [{"name": "user", "type": "bytes"}], "outputs": [
+        {"type": "uint256"}, {"type": "uint256"}, {"type": "uint256"}, {"type": "uint256"}, {"type": "uint256"}
+    ], "stateMutability": "view", "type": "function"},
+    {"name": "getRewards", "inputs": [{"name": "_user", "type": "bytes"}], "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
+]
+
+pesw_presale_contract = web3.eth.contract(address=PESW_PRESALE_CA, abi=pesw_presale_abi)
+pesw_staking_contract = web3.eth.contract(address=PESW_STAKING_MANAGER_CA, abi=pesw_staking_abi)
+
+@app.get("/presales")
+def get_presales(wallet: str = Query(..., min_length=42, max_length=42)):
+    try:
+        wallet_bytes = bytes.fromhex(wallet[2:])
+        # Deposits
+        deposits = pesw_presale_contract.functions.getUserDeposits(wallet_bytes).call() / 1e18
+
+        # Staking info
+        staked_info = pesw_staking_contract.functions.getPoolStakers(wallet_bytes).call()
+        staked_amount = staked_info[0] / 1e18
+        pending_rewards = pesw_staking_contract.functions.getRewards(wallet_bytes).call() / 1e18
+
+        # Price info
+        current_step = pesw_presale_contract.functions.currentStep().call()
+        current_price = pesw_presale_contract.functions.rounds(1, current_step).call() / 1e18
+
+        pesw_total_value_usd = (deposits + staked_amount + pending_rewards) * current_price
+
+        return {
+            "pesw": {
+                "icon": "https://www.pepesquid.world/_next/image?url=%2Ficons%2Fpesw_icon-72.png&w=256&q=75",
+                "deposited_tokens": deposits,
+                "staked_tokens": staked_amount,
+                "pending_rewards": pending_rewards,
+                "current_price_usd": current_price,
+                "launch_price_usd": 0.01155
+            },
+            "total_value_usd": pesw_total_value_usd
+        }
+    except Exception as e:
+        return {"error": str(e)}
