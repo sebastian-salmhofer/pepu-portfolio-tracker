@@ -456,6 +456,132 @@ def get_lp_positions(wallet: str = Query(..., min_length=42, max_length=42)):
 
 
 
+# Structure: (staking_contract_address, pool_id, token_label)
+STAKING_POOLS = [
+    {
+        "contract_address": Web3.to_checksum_address("0x99618fE301BabC0929D956018d8cfB9938810AeC"),
+        "pool_id": 0,
+        "token_label": "$777 Pool 0"
+    },
+    {
+        "contract_address": Web3.to_checksum_address("0x99618fE301BabC0929D956018d8cfB9938810AeC"),
+        "pool_id": 1,
+        "token_label": "$777 Pool 1"
+    }
+]
+
+multi_staking_abi = [
+    {
+        "name": "pools",
+        "inputs": [{"name": "id", "type": "uint256"}],
+        "outputs": [
+            {"name": "stakingToken", "type": "address"},
+            {"name": "rewardToken", "type": "address"},
+            {"name": "apyBasisPoints", "type": "uint256"},
+            {"name": "maxRewardDuration", "type": "uint256"},
+            {"name": "lockDuration", "type": "uint256"},
+            {"name": "lockStaking", "type": "bool"},
+            {"name": "allowRestake", "type": "bool"},
+            {"name": "totalStaked", "type": "uint256"},
+            {"name": "active", "type": "bool"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "name": "stakes",
+        "inputs": [{"name": "poolId", "type": "uint256"}, {"name": "user", "type": "address"}],
+        "outputs": [
+            {"name": "amount", "type": "uint256"},
+            {"name": "timestamp", "type": "uint256"},
+            {"name": "unclaimed", "type": "uint256"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "name": "pendingRewards",
+        "inputs": [{"name": "poolId", "type": "uint256"}, {"name": "user", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
+
+@app.get("/staking")
+def get_staking(wallet: str = Query(..., min_length=42, max_length=42)):
+    try:
+        checksum_wallet = Web3.to_checksum_address(wallet)
+    except:
+        return {"error": "Invalid wallet address format."}
+
+    now = time.time()
+    staking_results = []
+
+    for entry in STAKING_POOLS:
+        try:
+            contract = web3.eth.contract(address=entry["contract_address"], abi=multi_staking_abi)
+            pool_id = entry["pool_id"]
+            label = entry["token_label"]
+
+            pool = contract.functions.pools(pool_id).call()
+            stake = contract.functions.stakes(pool_id, checksum_wallet).call()
+            pending = contract.functions.pendingRewards(pool_id, checksum_wallet).call()
+
+            staking_token = Web3.to_checksum_address(pool[0])
+            apy = pool[2] / 100
+            lock_duration = pool[4]
+            amount_staked = stake[0] / 1e18
+            timestamp = stake[1]
+            pending_rewards = pending / 1e18
+
+            token_key = staking_token.lower()
+
+            if token_cache.get(token_key, {}).get("icon_url") is None:
+                populate_icon_cache([token_key], now)
+
+            if token_key not in token_cache or now - token_cache[token_key].get("timestamp", 0) > CACHE_TTL:
+                populate_price_cache([token_key], now)
+
+            info = token_cache.get(token_key, {})
+            price_usd = info.get("price_usd", 0.0)
+            icon_url = info.get("icon_url", "https://placehold.co/32x32")
+
+            remaining_lock = max(0, lock_duration - (int(now) - timestamp)) if timestamp else 0
+            total_value = (amount_staked + pending_rewards) * price_usd
+
+            staking_results.append({
+                "contract": entry["contract_address"],
+                "pool_id": pool_id,
+                "pool_name": label,
+                "token_address": staking_token,
+                "icon_url": icon_url,
+                "price_usd": price_usd,
+                "apy": apy,
+                "lock_duration": lock_duration,
+                "remaining_lock_time": remaining_lock,
+                "staked_amount": amount_staked,
+                "pending_rewards": pending_rewards,
+                "total_value_usd": round(total_value, 4)
+            })
+
+        except Exception as e:
+            staking_results.append({
+                "contract": entry["contract_address"],
+                "pool_id": entry["pool_id"],
+                "pool_name": entry["token_label"],
+                "error": f"Failed to fetch staking data: {str(e)}"
+            })
+
+    total_usd = sum(p.get("total_value_usd", 0) for p in staking_results if isinstance(p, dict) and "total_value_usd" in p)
+    return {
+        "staking_pools": staking_results,
+        "total_value_usd": round(total_usd, 2)
+    }
+
+
+
+
 PESW_PRESALE_CA = Web3.to_checksum_address("0xcE4268fB5908dAf59c198Ef26ef3f78949bf772C")
 PESW_STAKING_MANAGER_CA = Web3.to_checksum_address("0xDd6f17b253eDc9e3D7329FB6EA293DbF8b4c214d")
 
