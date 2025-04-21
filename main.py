@@ -688,9 +688,3 @@ async def track_wallet(wallet: str = Query(...)):
             await conn.execute("INSERT INTO tracked_wallets (wallet) VALUES ($1) ON CONFLICT DO NOTHING", wallet.lower())
     return {"status": "added", "wallet": wallet.lower()}
 
-# Add this in main.py temporarily to manually test:
-@app.get("/test-log-now")
-async def test_log_now():
-    from history import record_wallet_history
-    await record_wallet_history()  # Only for testing — remove or disable later
-    return {"status": "manual trigger done"}
