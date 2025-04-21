@@ -6,6 +6,7 @@ from web3 import Web3
 import time
 import re
 from decimal import Decimal
+import os
 
 app = FastAPI()
 
@@ -158,7 +159,7 @@ def get_amounts_from_liquidity(liquidity, sqrtPriceX96, sqrtLowerX96, sqrtUpperX
     return amount0, amount1
 
 @app.get("/portfolio")
-def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
+def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42), log_mode: bool = Query(False)):
     now = time.time()
     
     try:
@@ -237,7 +238,8 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
     
     # Determine and fetch missing icons
     missing_icons = [addr for addr in token_addrs if token_cache.get(addr, {}).get("icon_url") is None]
-    populate_icon_cache(missing_icons, now)
+    if not log_mode:
+        populate_icon_cache(missing_icons, now)
     
     
     # Determine tokens that still need fresh price data
@@ -247,7 +249,10 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
     ]
     
     # Fetch fresh price+liquidity in batches of 30
-    populate_price_cache(needs_price_update, now)
+    if not log_mode:
+        populate_price_cache(needs_price_update, now)
+    else:
+        populate_price_cache(needs_price_update, now, retries=12, delay=15)
     
     # Now use the populated cache to build the response
     for t in tokens:
@@ -294,7 +299,7 @@ def get_portfolio(wallet: str = Query(..., min_length=42, max_length=42)):
     return result
 
 @app.get("/lp-positions")
-def get_lp_positions(wallet: str = Query(..., min_length=42, max_length=42)):
+def get_lp_positions(wallet: str = Query(..., min_length=42, max_length=42), log_mode: bool = Query(False)):
     now = time.time()
 
     total_lp = 0.0
@@ -374,9 +379,10 @@ def get_lp_positions(wallet: str = Query(..., min_length=42, max_length=42)):
                     token1_lower = token1.lower()
     
                     # Icons
-                    for addr in [token0_lower, token1_lower]:
-                        if token_cache.get(addr, {}).get("icon_url") is None:
-                            populate_icon_cache([addr], now)
+                    if not log_mode:
+                        for addr in [token0_lower, token1_lower]:
+                            if token_cache.get(addr, {}).get("icon_url") is None:
+                                populate_icon_cache([addr], now)
     
                     # Price check
                     if token0_lower not in token_cache or (now - token_cache[token0_lower].get("timestamp", 0)) > CACHE_TTL:
@@ -427,7 +433,10 @@ def get_lp_positions(wallet: str = Query(..., min_length=42, max_length=42)):
         result["lp_positions"].extend(lp for lp in lp_results if lp)
     
         # Fetch fresh price+liquidity
-        populate_price_cache(list(lp_price_update), now)
+        if not log_mode:
+            populate_price_cache(list(lp_price_update), now)
+        else:
+            populate_price_cache(lp_price_update, now, retries=12, delay=15)
     
         # Final price + USD calc
         for lp in result["lp_positions"]:
@@ -509,7 +518,7 @@ multi_staking_abi = [
 ]
 
 @app.get("/staking")
-def get_staking(wallet: str = Query(..., min_length=42, max_length=42)):
+def get_staking(wallet: str = Query(..., min_length=42, max_length=42), log_mode: bool = Query(False)):
     try:
         checksum_wallet = Web3.to_checksum_address(wallet)
     except:
@@ -537,11 +546,15 @@ def get_staking(wallet: str = Query(..., min_length=42, max_length=42)):
 
             token_key = staking_token.lower()
 
-            if token_cache.get(token_key, {}).get("icon_url") is None:
-                populate_icon_cache([token_key], now)
+            if not log_mode:
+                if token_cache.get(token_key, {}).get("icon_url") is None:
+                    populate_icon_cache([token_key], now)
 
             if token_key not in token_cache or now - token_cache[token_key].get("timestamp", 0) > CACHE_TTL:
-                populate_price_cache([token_key], now)
+                if not log_mode:
+                    populate_price_cache([token_key], now)
+                else:
+                    populate_price_cache([token_key], now, retries=12, delay=15)
 
             info = token_cache.get(token_key, {})
             price_usd = info.get("price_usd", 0.0)
@@ -612,7 +625,7 @@ pesw_presale_contract = web3.eth.contract(address=PESW_PRESALE_CA, abi=pesw_pres
 pesw_staking_contract = web3.eth.contract(address=PESW_STAKING_MANAGER_CA, abi=pesw_staking_abi)
 
 @app.get("/presales")
-def get_presales(wallet: str = Query(..., min_length=42, max_length=42)):
+def get_presales(wallet: str = Query(..., min_length=42, max_length=42), log_mode: bool = Query(False)):
     try:
         wallet_bytes = bytes.fromhex(wallet[2:])
         # Deposits
@@ -642,3 +655,42 @@ def get_presales(wallet: str = Query(..., min_length=42, max_length=42)):
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+# --- History Integration ---
+from history import record_wallet_history, get_wallet_history
+import asyncio
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(record_wallet_history())
+
+@app.get("/wallet-history")
+async def wallet_history(
+    wallets: str = Query(...),
+    message: str = Query(...),
+    signature: str = Query(...)
+):
+    return await get_wallet_history(wallets, message, signature)
+
+@app.get("/track-wallet")
+async def track_wallet(wallet: str = Query(...)):
+    import asyncpg
+    DB_URL = os.getenv("DATABASE_URL")
+    async with asyncpg.create_pool(DB_URL) as pool:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracked_wallets (
+                    id SERIAL PRIMARY KEY,
+                    wallet TEXT UNIQUE NOT NULL
+                )
+            """)
+            await conn.execute("INSERT INTO tracked_wallets (wallet) VALUES ($1) ON CONFLICT DO NOTHING", wallet.lower())
+    return {"status": "added", "wallet": wallet.lower()}
+
+# Add this in main.py temporarily to manually test:
+@app.get("/test-log-now")
+async def test_log_now():
+    from history import record_wallet_history
+    await record_wallet_history()  # Only for testing — remove or disable later
+    return {"status": "manual trigger done"}
