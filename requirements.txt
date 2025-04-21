@@ -2,3 +2,6 @@ fastapi
 uvicorn
 requests
 web3==6.12.0
+sqlite-utils
+asyncpg
+httpx
